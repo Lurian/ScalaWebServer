@@ -1,20 +1,20 @@
-import akka.actor.{Actor, ActorLogging, ActorRef, Props}
+import akka.actor.{Actor, ActorLogging, ActorRef, Cancellable, Props}
 import akka.http.scaladsl.Http
 import akka.http.scaladsl.marshallers.sprayjson.SprayJsonSupport._
 import akka.http.scaladsl.model.{HttpRequest, HttpResponse, StatusCodes}
 import akka.http.scaladsl.unmarshalling.Unmarshal
 import akka.stream.{ActorMaterializer, ActorMaterializerSettings}
 import spray.json.DefaultJsonProtocol.{jsonFormat4, _}
+import spray.json.RootJsonFormat
 
 import scala.concurrent.duration.FiniteDuration
 import scala.util.{Failure, Success}
 
 
-
 object MovieGetter {
   case class Movie(id: String, title: String, description: String, director: String)
   case object GetTimeout
-  case object RequestProblem
+  case class RequestProblem(problem: String)
 
   def props(
              movieId: String,
@@ -37,14 +37,15 @@ class MovieGetter(movieId: String,
   import MovieGetter._
   import akka.pattern.pipe
   import context.dispatcher
-  implicit val movieFormat = jsonFormat4(Movie)
+  implicit val movieFormat:RootJsonFormat[Movie] = jsonFormat4(Movie)
 
   final implicit val materializer: ActorMaterializer = ActorMaterializer(ActorMaterializerSettings(context.system))
 
   val http = Http(context.system)
-  val queryTimeoutTimer = context.system.scheduler.scheduleOnce(timeout, self, GetTimeout)
+  val queryTimeoutTimer:Cancellable = context.system.scheduler.scheduleOnce(timeout, self, GetTimeout)
 
-  override def preStart() = {
+  override def preStart(): Unit = {
+    log.info(s"Starting request at: https://ghibliapi.herokuapp.com/films/$movieId")
     http.singleRequest(HttpRequest(
       uri = s"https://ghibliapi.herokuapp.com/films/$movieId"
     )).pipeTo(self)
@@ -61,22 +62,23 @@ class MovieGetter(movieId: String,
       result onComplete {
         case Success(value: Movie) =>
           log.info(s"Request Successful $value")
-          requester ! value
+          requester ! Left(value)
           context.stop(self)
         case Failure(err) =>
           log.info(s"err : $err")
-          requester ! RequestProblem
+          requester ! Right(RequestProblem("Failed on completing the future"))
           context.stop(self)
       }
     // Case Failure
     case resp @ HttpResponse(code, _, _, _) =>
       log.info("Request failed, response code: " + code)
       resp.discardEntityBytes()
-      requester ! RequestProblem
+      requester ! Right(RequestProblem("Failed on the requisition"))
       context.stop(self)
     // Case Timeout
     case GetTimeout =>
-      requester ! RequestProblem
+      log.info("Timeout!")
+      requester ! Right(RequestProblem("Timeout Failure"))
       context.stop(self)
   }
 }

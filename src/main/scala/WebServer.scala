@@ -1,4 +1,4 @@
-import MovieGetter.Movie
+import MovieGetter.{Movie, RequestProblem}
 import MovieManager.MovieGet
 import akka.actor.{ActorSystem, Props}
 import akka.http.scaladsl.Http
@@ -9,27 +9,28 @@ import akka.pattern.ask
 import akka.stream.ActorMaterializer
 import akka.util.Timeout
 import spray.json.DefaultJsonProtocol._
+import spray.json.RootJsonFormat
 
-import scala.concurrent.Future
+import scala.concurrent.{ExecutionContextExecutor, Future}
 import scala.concurrent.duration._
 import scala.io.StdIn
 
 object WebServer {
   def main(args: Array[String]) {
-    implicit val movieFormat = jsonFormat4(Movie)
-    implicit val system = ActorSystem()
-    implicit val materializer = ActorMaterializer()
+    implicit val movieFormat:RootJsonFormat[Movie] = jsonFormat4(Movie)
+    implicit val requestProblemFormat:RootJsonFormat[RequestProblem] = jsonFormat1(RequestProblem)
+    implicit val system:ActorSystem = ActorSystem()
+    implicit val materializer:ActorMaterializer = ActorMaterializer()
     // needed for the future flatMap/onComplete in the end
-    implicit val executionContext = system.dispatcher
+    implicit val executionContext:ExecutionContextExecutor = system.dispatcher
     val movieManager = system.actorOf(Props[MovieManager], "movieManager")
 
     val route: Route =
       get {
         pathPrefix("movie" /  PathMatchers.Segment ) { id:String =>
-          println(id)
-          implicit val timeout = Timeout(5 seconds)
-          val movie: Future[Movie] = (movieManager ? MovieGet(id.toString)).mapTo[Movie]
-          complete(movie)
+          implicit val timeout:Timeout = Timeout(10 seconds)
+          val response: Future[Either[Movie, RequestProblem]] = (movieManager ? MovieGet(id.toString)).mapTo[Either[Movie, RequestProblem]]
+          complete(response)
         }
       }
 
